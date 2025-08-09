@@ -1,0 +1,154 @@
+; Program: FullFeatureTest
+.CODE
+  JMP main
+
+.DATA
+  ; Class definition for TAnimal
+  ; Class definition for TDog
+  ; Subroutine declaration: SayHello
+.DATA
+  VAR i, integer, 4
+
+.TEXT
+main:
+  ; Compound statement begins
+  MOV R0, #0
+  MOV i, R0
+  ; While loop
+  MOV R0, count
+  PUSH R0
+  MOV R0, i
+  POP R1
+  ??? R0, R0, R1
+  ; Compound statement begins
+  MOV R0, #1
+  PUSH R0
+  MOV R0, i
+  POP R1
+  ADD R0, R0, R1
+  MOV i, R0
+  ; Compound statement ends
+  ; Compound statement ends
+  HALT
+  ; Subroutine declaration: GetDayOfWeek
+.DATA
+
+.TEXT
+main:
+  ; Compound statement begins
+  ; Compound statement ends
+  HALT
+  ; Subroutine declaration: TAnimal
+.DATA
+
+.TEXT
+main:
+  ; Compound statement begins
+  MOV R0, AName
+  MOV FName, R0
+  MOV R0, AAge
+  MOV FAge, R0
+  ; Compound statement ends
+  HALT
+  ; Subroutine declaration: TAnimal
+.DATA
+
+.TEXT
+main:
+  ; Compound statement begins
+  ; Compound statement ends
+  HALT
+  ; Subroutine declaration: TAnimal
+.DATA
+
+.TEXT
+main:
+  ; Compound statement begins
+  ; If statement
+  MOV R0, #2
+  PUSH R0
+  MOV R0, FAge
+  POP R1
+  ??? R0, R0, R1
+    ; String literal: a baby
+  MOV Result, R0
+  ; If statement
+  MOV R0, #10
+  PUSH R0
+  MOV R0, FAge
+  POP R1
+  ??? R0, R0, R1
+    ; String literal: an adult
+  MOV Result, R0
+    ; String literal: a senior
+  MOV Result, R0
+  ; Compound statement ends
+  HALT
+  ; Subroutine declaration: TAnimal
+.DATA
+
+.TEXT
+main:
+  ; Compound statement begins
+  ; Expression statement
+  MOV R0, inherited
+  ; Expression statement
+  MOV R0, Destroy
+  ; Compound statement ends
+  HALT
+  ; Subroutine declaration: TDog
+.DATA
+
+.TEXT
+main:
+  ; Compound statement begins
+  ; Compound statement ends
+  HALT
+  ; Subroutine declaration: TDog
+.DATA
+  VAR i, integer, 4
+
+.TEXT
+main:
+  ; Compound statement begins
+  MOV R0, #0
+  MOV i, R0
+  ; Repeat loop
+  MOV R0, #1
+  PUSH R0
+  MOV R0, i
+  POP R1
+  ??? R0, R0, R1
+  ; Compound statement ends
+  HALT
+  VAR Animal, TAnimal, 4
+  VAR Dog, TDog, 4
+  VAR dayStr, string, 256
+
+.TEXT
+main:
+  ; Compound statement begins
+  ; Expression statement
+    ; Method call
+  MOV R0, SayHello
+    ; Method call
+  MOV R0, GetDayOfWeek
+  MOV dayStr, R0
+    ; Method call
+    ; Member access
+  MOV R0, TDog
+  MOV Dog, R0
+  ; Expression statement
+    ; Member access
+  MOV R0, Dog
+  ; Expression statement
+    ; Member access
+  MOV R0, Dog
+    ; Member access
+  MOV R0, Dog
+  MOV dayStr, R0
+  ; Expression statement
+    ; Member access
+  MOV R0, Dog
+  ; Compound statement ends
+  HALT

@@ -1,0 +1,49 @@
+; Program: ObjectOrientedExample
+.CODE
+  JMP main
+
+.DATA
+  ; Class definition for TAnimal
+  ; Class definition for TDog
+  VAR MyAnimal, TAnimal, 4
+  VAR MyDog, TDog, 4
+
+.TEXT
+main:
+  ; Compound statement begins
+    ; Method call
+    ; Member access
+  MOV R0, TAnimal
+  MOV MyAnimal, R0
+  ; Expression statement
+    ; Member access
+  MOV R0, MyAnimal
+  ; Expression statement
+    ; Member access
+  MOV R0, MyAnimal
+  ; Expression statement
+    ; Method call
+    ; Member access
+  MOV R0, MyAnimal
+  ; Expression statement
+    ; Member access
+  MOV R0, MyAnimal
+  ; Expression statement
+    ; Method call
+  MOV R0, writeln
+    ; Method call
+    ; Member access
+  MOV R0, TDog
+  MOV MyDog, R0
+  ; Expression statement
+    ; Member access
+  MOV R0, MyDog
+  ; Expression statement
+    ; Method call
+    ; Member access
+  MOV R0, MyDog
+  ; Expression statement
+    ; Member access
+  MOV R0, MyDog
+  ; Compound statement ends
+  HALT

@@ -1,0 +1,15 @@
+; Program: TestProgram
+.CODE
+  JMP main
+
+.DATA
+  VAR x, integer, 4
+  VAR y, integer, 4
+  VAR s, string, 256
+  VAR message, string, 256
+
+.TEXT
+main:
+  ; Compound statement begins
+  ; Compound statement ends
+  HALT
