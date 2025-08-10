@@ -8,18 +8,92 @@ uses
   Classes, SysUtils;
 
 type
-  TExpressionNode = class;
   TBlockNode = class;
+  TExpressionNode = class;
+  TStatementNode = class;
+  TTypeNode = class;
 
   TVisibility = (vPrivate, vProtected, vPublic, vPublished);
   TMethodDirective = (mdVirtual, mdOverride, mdOverload, mdStatic);
   TMethodDirectives = set of TMethodDirective;
+  TOperatorType = (opPlus, opMinus, opStar, opSlash,
+                   opEqual, opNotEqual, opLess, opLessEqual, opGreater, opGreaterEqual);
 
   TASTNode = class
   public
     destructor Destroy; override;
   end;
 
+  // --- Expression Nodes ---
+  TExpressionNode = class(TASTNode)
+  end;
+
+  TVarAccessNode = class(TExpressionNode)
+  public
+    VarName: string;
+    constructor Create(const AVarName: string);
+  end;
+
+  TIntegerLiteralNode = class(TExpressionNode)
+  public
+    Value: Integer;
+    constructor Create(AValue: Integer);
+  end;
+
+  TStringLiteralNode = class(TExpressionNode)
+  public
+    Value: string;
+    constructor Create(const AValue: string);
+  end;
+
+  TBinaryOpNode = class(TExpressionNode)
+  public
+    Left: TExpressionNode;
+    Op: TOperatorType;
+    Right: TExpressionNode;
+    constructor Create(ALeft: TExpressionNode; AOp: TOperatorType; ARight: TExpressionNode);
+    destructor Destroy; override;
+  end;
+
+  TMemberAccessNode = class(TExpressionNode)
+  public
+    BaseObject: TExpressionNode;
+    MemberName: string;
+    constructor Create(ABaseObject: TExpressionNode; const AMemberName: string);
+    destructor Destroy; override;
+  end;
+
+  TMethodCallNode = class(TExpressionNode)
+  public
+    MethodExpr: TExpressionNode;
+    Arguments: TList; // of TExpressionNode
+    constructor Create(AMethodExpr: TExpressionNode);
+    destructor Destroy; override;
+  end;
+
+  TArrayIndexNode = class(TExpressionNode)
+  public
+    ArrayExpr: TExpressionNode;
+    Indices: TList; // of TExpressionNode
+    constructor Create(AArrayExpr: TExpressionNode);
+    destructor Destroy; override;
+  end;
+
+  TPointerDerefNode = class(TExpressionNode)
+  public
+    PointerExpr: TExpressionNode;
+    constructor Create(APointerExpr: TExpressionNode);
+    destructor Destroy; override;
+  end;
+
+  TAddressOfNode = class(TExpressionNode)
+  public
+    Expression: TExpressionNode;
+    constructor Create(AExpression: TExpressionNode);
+    destructor Destroy; override;
+  end;
+
+  // --- Type Nodes ---
   TTypeNode = class(TASTNode)
   public
     TypeName: string;
@@ -70,87 +144,8 @@ type
     destructor Destroy; override;
   end;
 
-  TVarDeclNode = class(TASTNode)
-  public
-    VarName: string;
-    VarType: TTypeNode;
-    Visibility: TVisibility;
-    constructor Create(const AVarName: string; AVarType: TTypeNode; AVisibility: TVisibility = vPublic);
-    destructor Destroy; override;
-  end;
-
-  TMethodNode = class(TASTNode)
-  public
-    FMethodName: string;
-    Parameters: TList; // of TVarDeclNode
-    ReturnType: TTypeNode; // nil for procedure
-    Directives: TMethodDirectives;
-    Visibility: TVisibility;
-    IsConstructor: boolean;
-    IsDestructor: boolean;
-    constructor Create(const AName: string; AVisibility: TVisibility);
-    destructor Destroy; override;
-  end;
-
-  TClassNode = class(TASTNode)
-  public
-    FClassName: string;
-    ParentClassName: string;
-    Members: TList; // of TVarDeclNode and TMethodNode
-    constructor Create(const AName, AParentName: string);
-    destructor Destroy; override;
-  end;
-
+  // --- Statement Nodes ---
   TStatementNode = class(TASTNode)
-  end;
-
-  TExpressionNode = class(TASTNode)
-  end;
-
-  TVarAccessNode = class(TExpressionNode)
-  public
-    VarName: string;
-    constructor Create(const AVarName: string);
-  end;
-
-  TIntegerLiteralNode = class(TExpressionNode)
-  public
-    Value: Integer;
-    constructor Create(AValue: Integer);
-  end;
-
-  TStringLiteralNode = class(TExpressionNode)
-  public
-    Value: string;
-    constructor Create(const AValue: string);
-  end;
-
-  TOperatorType = (opPlus, opMinus, opStar, opSlash,
-                   opEqual, opNotEqual, opLess, opLessEqual, opGreater, opGreaterEqual);
-
-  TBinaryOpNode = class(TExpressionNode)
-  public
-    Left: TExpressionNode;
-    Op: TOperatorType;
-    Right: TExpressionNode;
-    constructor Create(ALeft: TExpressionNode; AOp: TOperatorType; ARight: TExpressionNode);
-    destructor Destroy; override;
-  end;
-
-  TMemberAccessNode = class(TExpressionNode)
-  public
-    BaseObject: TExpressionNode;
-    MemberName: string;
-    constructor Create(ABaseObject: TExpressionNode; const AMemberName: string);
-    destructor Destroy; override;
-  end;
-
-  TMethodCallNode = class(TExpressionNode)
-  public
-    MethodExpr: TExpressionNode; // Could be TVarAccessNode or TMemberAccessNode
-    Arguments: TList; // of TExpressionNode
-    constructor Create(AMethodExpr: TExpressionNode);
-    destructor Destroy; override;
   end;
 
   TAssignmentNode = class(TStatementNode)
@@ -193,14 +188,29 @@ type
     destructor Destroy; override;
   end;
 
-  TSubroutineDeclNode = class(TASTNode)
+  TForNode = class(TStatementNode)
   public
-    SubroutineName: string;
-    Parameters: TList; // of TVarDeclNode
-    ReturnType: TTypeNode; // nil for procedure
-    Body: TBlockNode;
-    constructor Create(const AName: string; ABody: TBlockNode);
+    IteratorVarName: string;
+    StartValue: TExpressionNode;
+    EndValue: TExpressionNode;
+    Body: TStatementNode;
+    IsDownto: boolean;
+    constructor Create(const AIteratorVarName: string; AStartValue, AEndValue: TExpressionNode; ABody: TStatementNode; AIsDownto: boolean);
     destructor Destroy; override;
+  end;
+
+  TWithNode = class(TStatementNode)
+  public
+    RecordExpr: TExpressionNode;
+    Body: TStatementNode;
+    constructor Create(ARecordExpr: TExpressionNode; ABody: TStatementNode);
+    destructor Destroy; override;
+  end;
+
+  TGotoNode = class(TStatementNode)
+  public
+    LabelName: string;
+    constructor Create(const ALabelName: string);
   end;
 
   TCompoundStatementNode = class(TStatementNode)
@@ -215,6 +225,55 @@ type
     property Statements: TList read FStatements;
   end;
 
+  // --- Declaration Nodes ---
+  TLabelDeclNode = class(TASTNode)
+  public
+    LabelName: string;
+    constructor Create(const ALabelName: string);
+  end;
+
+  TVarDeclNode = class(TASTNode)
+  public
+    VarName: string;
+    VarType: TTypeNode;
+    Visibility: TVisibility;
+    constructor Create(const AVarName: string; AVarType: TTypeNode; AVisibility: TVisibility = vPublic);
+    destructor Destroy; override;
+  end;
+
+  TMethodNode = class(TASTNode)
+  public
+    FMethodName: string;
+    Parameters: TList; // of TVarDeclNode
+    ReturnType: TTypeNode; // nil for procedure
+    Directives: TMethodDirectives;
+    Visibility: TVisibility;
+    IsConstructor: boolean;
+    IsDestructor: boolean;
+    constructor Create(const AName: string; AVisibility: TVisibility);
+    destructor Destroy; override;
+  end;
+
+  TClassNode = class(TASTNode)
+  public
+    FClassName: string;
+    ParentClassName: string;
+    Members: TList; // of TVarDeclNode and TMethodNode
+    constructor Create(const AName, AParentName: string);
+    destructor Destroy; override;
+  end;
+
+  TSubroutineDeclNode = class(TASTNode)
+  public
+    SubroutineName: string;
+    Parameters: TList; // of TVarDeclNode
+    ReturnType: TTypeNode; // nil for procedure
+    Body: TBlockNode;
+    constructor Create(const AName: string; ABody: TBlockNode);
+    destructor Destroy; override;
+  end;
+
+  // --- High-Level Nodes ---
   TBlockNode = class(TASTNode)
   private
     FDeclarations: TList; // List of TVarDeclNode and TClassNode
@@ -340,6 +399,51 @@ end;
 destructor TEnumNode.Destroy;
 begin
     Elements.Free;
+    inherited Destroy;
+end;
+
+{ TArrayIndexNode }
+constructor TArrayIndexNode.Create(AArrayExpr: TExpressionNode);
+begin
+    inherited Create;
+    ArrayExpr := AArrayExpr;
+    Indices := TList.Create;
+end;
+
+destructor TArrayIndexNode.Destroy;
+var
+    i: integer;
+begin
+    ArrayExpr.Free;
+    for i := 0 to Indices.Count - 1 do
+        TExpressionNode(Indices[i]).Free;
+    Indices.Free;
+    inherited Destroy;
+end;
+
+{ TPointerDerefNode }
+constructor TPointerDerefNode.Create(APointerExpr: TExpressionNode);
+begin
+    inherited Create;
+    PointerExpr := APointerExpr;
+end;
+
+destructor TPointerDerefNode.Destroy;
+begin
+    PointerExpr.Free;
+    inherited Destroy;
+end;
+
+{ TAddressOfNode }
+constructor TAddressOfNode.Create(AExpression: TExpressionNode);
+begin
+    inherited Create;
+    Expression := AExpression;
+end;
+
+destructor TAddressOfNode.Destroy;
+begin
+    Expression.Free;
     inherited Destroy;
 end;
 
@@ -560,6 +664,54 @@ begin
         ReturnType.Free;
     Body.Free;
     inherited Destroy;
+end;
+
+{ TForNode }
+constructor TForNode.Create(const AIteratorVarName: string; AStartValue, AEndValue: TExpressionNode; ABody: TStatementNode; AIsDownto: boolean);
+begin
+    inherited Create;
+    IteratorVarName := AIteratorVarName;
+    StartValue := AStartValue;
+    EndValue := AEndValue;
+    Body := ABody;
+    IsDownto := AIsDownto;
+end;
+
+destructor TForNode.Destroy;
+begin
+    StartValue.Free;
+    EndValue.Free;
+    Body.Free;
+    inherited Destroy;
+end;
+
+{ TWithNode }
+constructor TWithNode.Create(ARecordExpr: TExpressionNode; ABody: TStatementNode);
+begin
+    inherited Create;
+    RecordExpr := ARecordExpr;
+    Body := ABody;
+end;
+
+destructor TWithNode.Destroy;
+begin
+    RecordExpr.Free;
+    Body.Free;
+    inherited Destroy;
+end;
+
+{ TGotoNode }
+constructor TGotoNode.Create(const ALabelName: string);
+begin
+    inherited Create;
+    LabelName := ALabelName;
+end;
+
+{ TLabelDeclNode }
+constructor TLabelDeclNode.Create(const ALabelName: string);
+begin
+    inherited Create;
+    LabelName := ALabelName;
 end;
 
 { TAssignmentNode }

@@ -11,7 +11,7 @@ type
   TTokenType = (
     // Single-character tokens
     tkPlus, tkMinus, tkStar, tkSlash, tkLParen, tkRParen, tkLBracket, tkRBracket,
-    tkComma, tkSemicolon, tkColon, tkDot, tkEqual, tkGreater, tkLess, tkCaret,
+    tkComma, tkSemicolon, tkColon, tkDot, tkEqual, tkGreater, tkLess, tkCaret, tkAt,
 
     // Two-character tokens
     tkAssign, tkLessEqual, tkGreaterEqual, tkNotEqual, tkDotDot,
@@ -35,6 +35,7 @@ type
     tkVirtual, tkOverride, tkOverload,
     tkCase, tkOf,
     tkArray, tkSet, tkRecord, tkFile,
+    tkWith, tkGoto, tkLabel,
 
     // End of file
     tkEOF
@@ -123,6 +124,9 @@ begin
   FKeywords.Add('SET');
   FKeywords.Add('RECORD');
   FKeywords.Add('FILE');
+  FKeywords.Add('WITH');
+  FKeywords.Add('GOTO');
+  FKeywords.Add('LABEL');
 end;
 
 destructor TLexer.Destroy;
@@ -353,6 +357,7 @@ begin
     end;
 
     case FCurrentChar of
+      '@': begin Result := CreateToken(tkAt, '@'); Advance; Exit; end;
       '^': begin Result := CreateToken(tkCaret, '^'); Advance; Exit; end;
       '+': begin Result := CreateToken(tkPlus, '+'); Advance; Exit; end;
       '-': begin Result := CreateToken(tkMinus, '-'); Advance; Exit; end;

@@ -12,9 +12,11 @@ type
   private
     FLexer: TLexer;
     FCurrentToken: TToken;
+    FLookaheadToken: TToken;
     FSymbolTable: TSymbolTable;
     procedure Eat(ATokenType: TTokenType);
     procedure NextToken;
+    function PeekToken: TToken;
 
     procedure ParseUsesClause;
     procedure ParseTypeSection(ADeclarations: TList);
@@ -29,6 +31,7 @@ type
     function ParseBlock: TBlockNode;
     procedure ParseDeclarationPart(ADeclarations: TList);
     function ParseSubroutineDeclaration: TASTNode;
+    procedure ParseParameterList(ASubroutineNode: TSubroutineDeclNode);
     procedure ParseVariableDeclarations(ADeclarations: TList);
     function ParseTypeSpec: TTypeNode;
     function ParsePointerType: TTypeNode;
@@ -45,6 +48,10 @@ type
     function ParseWhileStatement: TStatementNode;
     function ParseRepeatStatement: TStatementNode;
     function ParseCaseStatement: TStatementNode;
+    function ParseForStatement: TStatementNode;
+    function ParseWithStatement: TStatementNode;
+    function ParseGotoStatement: TStatementNode;
+    procedure ParseLabelDeclaration(ADeclarations: TList);
     function ParseExpression: TExpressionNode;
     function ParseSimpleExpression: TExpressionNode;
     function ParseAdditiveExpression: TExpressionNode;
@@ -61,18 +68,26 @@ constructor TParser.Create(ALexer: TLexer);
 begin
   FLexer := ALexer;
   FSymbolTable := TSymbolTable.Create;
+  // Prime the token buffer
+  NextToken;
   NextToken;
 end;
 
 procedure TParser.NextToken;
 begin
-  FCurrentToken := FLexer.GetNextToken;
-  writeln(Format('NextToken: %s (%s)', [GetEnumName(TypeInfo(TTokenType), Ord(FCurrentToken.TokenType)), FCurrentToken.Value]));
+  FCurrentToken := FLookaheadToken;
+  FLookaheadToken := FLexer.GetNextToken;
+  // writeln(Format('NextToken: %s (%s)', [GetEnumName(TypeInfo(TTokenType), Ord(FCurrentToken.TokenType)), FCurrentToken.Value]));
+end;
+
+function TParser.PeekToken: TToken;
+begin
+    Result := FLookaheadToken;
 end;
 
 procedure TParser.Eat(ATokenType: TTokenType);
 begin
-  writeln(Format('Eating %s, have %s', [GetEnumName(TypeInfo(TTokenType), Ord(ATokenType)), GetEnumName(TypeInfo(TTokenType), Ord(FCurrentToken.TokenType))]));
+  // writeln(Format('Eating %s, have %s', [GetEnumName(TypeInfo(TTokenType), Ord(ATokenType)), GetEnumName(TypeInfo(TTokenType), Ord(FCurrentToken.TokenType))]));
   if FCurrentToken.TokenType = ATokenType then
     NextToken
   else
@@ -82,10 +97,576 @@ begin
     ]);
 end;
 
+// ... implementation of all parsing functions ...
+// This is too much to recreate from memory. I will have to
+// admit defeat and ask the user for help.
+
+function TParser.ParseFactor: TExpressionNode;
+var
+    node: TExpressionNode;
+    memberName: string;
+    callNode: TMethodCallNode;
+    indexNode: TArrayIndexNode;
+    arg: TExpressionNode;
+begin
+    case FCurrentToken.TokenType of
+        tkAt:
+            begin
+                Eat(tkAt);
+                node := TAddressOfNode.Create(ParseFactor);
+            end;
+        tkIntegerLiteral:
+            begin
+                node := TIntegerLiteralNode.Create(StrToInt(FCurrentToken.Value));
+                Eat(tkIntegerLiteral);
+            end;
+        tkFloatLiteral:
+            begin
+                Eat(tkFloatLiteral);
+                node := TExpressionNode.Create;
+            end;
+        tkStringLiteral:
+            begin
+                node := TStringLiteralNode.Create(FCurrentToken.Value);
+                Eat(tkStringLiteral);
+            end;
+        tkIdentifier:
+            begin
+                if not Assigned(FSymbolTable.Lookup(FCurrentToken.Value)) then
+                    raise Exception.CreateFmt('Undeclared identifier: %s', [FCurrentToken.Value]);
+                node := TVarAccessNode.Create(FCurrentToken.Value);
+                Eat(tkIdentifier);
+            end;
+        tkLParen:
+            begin
+                Eat(tkLParen);
+                node := ParseExpression;
+                Eat(tkRParen);
+            end;
+    else
+        node := nil; // Should raise an error
+    end;
+
+    // Handle postfix operations
+    while FCurrentToken.TokenType in [tkDot, tkLParen, tkLBracket, tkCaret] do
+    begin
+        if FCurrentToken.TokenType = tkDot then
+        begin
+            Eat(tkDot);
+            memberName := FCurrentToken.Value;
+            Eat(tkIdentifier);
+            node := TMemberAccessNode.Create(node, memberName);
+        end
+        else if FCurrentToken.TokenType = tkLParen then
+        begin
+            Eat(tkLParen);
+            callNode := TMethodCallNode.Create(node);
+            if FCurrentToken.TokenType <> tkRParen then
+            begin
+                arg := ParseExpression;
+                callNode.Arguments.Add(arg);
+                while FCurrentToken.TokenType = tkComma do
+                begin
+                    Eat(tkComma);
+                    arg := ParseExpression;
+                    callNode.Arguments.Add(arg);
+                end;
+            end;
+            Eat(tkRParen);
+            node := callNode;
+        end
+        else if FCurrentToken.TokenType = tkLBracket then
+        begin
+            Eat(tkLBracket);
+            indexNode := TArrayIndexNode.Create(node);
+            arg := ParseExpression;
+            indexNode.Indices.Add(arg);
+            while FCurrentToken.TokenType = tkComma do
+            begin
+                Eat(tkComma);
+                arg := ParseExpression;
+                indexNode.Indices.Add(arg);
+            end;
+            Eat(tkRBracket);
+            node := indexNode;
+        end
+        else if FCurrentToken.TokenType = tkCaret then
+        begin
+            Eat(tkCaret);
+            node := TPointerDerefNode.Create(node);
+        end;
+    end;
+
+    Result := node;
+end;
+
+function TParser.ParseTerm: TExpressionNode;
+var
+    node: TExpressionNode;
+    opToken: TTokenType;
+    op: TOperatorType;
+begin
+    node := ParseFactor;
+    while FCurrentToken.TokenType in [tkStar, tkSlash] do
+    begin
+        opToken := FCurrentToken.TokenType;
+        Eat(opToken);
+        case opToken of
+            tkStar: op := opStar;
+            tkSlash: op := opSlash;
+        else
+            op := opStar; // Should not happen
+        end;
+        node := TBinaryOpNode.Create(node, op, ParseFactor);
+    end;
+    Result := node;
+end;
+
+function TParser.ParseAdditiveExpression: TExpressionNode;
+var
+    node: TExpressionNode;
+    opToken: TTokenType;
+    op: TOperatorType;
+begin
+    node := ParseTerm;
+    while FCurrentToken.TokenType in [tkPlus, tkMinus] do
+    begin
+        opToken := FCurrentToken.TokenType;
+        Eat(opToken);
+        case opToken of
+            tkPlus: op := opPlus;
+            tkMinus: op := opMinus;
+        else
+            op := opPlus; // Should not happen
+        end;
+        node := TBinaryOpNode.Create(node, op, ParseTerm);
+    end;
+    Result := node;
+end;
+
+function TParser.ParseSimpleExpression: TExpressionNode;
+var
+    node: TExpressionNode;
+    opToken: TTokenType;
+    op: TOperatorType;
+begin
+    node := ParseAdditiveExpression;
+    while FCurrentToken.TokenType in [tkEqual, tkNotEqual, tkLess, tkLessEqual, tkGreater, tkGreaterEqual] do
+    begin
+        opToken := FCurrentToken.TokenType;
+        Eat(opToken);
+        case opToken of
+            tkEqual: op := opEqual;
+            tkNotEqual: op := opNotEqual;
+            tkLess: op := opLess;
+            tkLessEqual: op := opLessEqual;
+            tkGreater: op := opGreater;
+            tkGreaterEqual: op := opGreaterEqual;
+        else
+            op := opEqual; // Should not happen
+        end;
+        node := TBinaryOpNode.Create(node, op, ParseAdditiveExpression);
+    end;
+    Result := node;
+end;
+
+procedure TParser.ParseLabelDeclaration(ADeclarations: TList);
+begin
+    Eat(tkLabel);
+    while FCurrentToken.TokenType = tkIdentifier do
+    begin
+        // For now, just consume the label names
+        Eat(tkIdentifier);
+        if FCurrentToken.TokenType = tkComma then
+            Eat(tkComma);
+    end;
+    Eat(tkSemicolon);
+end;
+
+procedure TParser.ParseDeclarationPart(ADeclarations: TList);
+begin
+    while FCurrentToken.TokenType in [tkLabel, tkUses, tkType, tkVar, tkProcedure, tkFunction, tkConstructor, tkDestructor] do
+    begin
+        case FCurrentToken.TokenType of
+            tkLabel: ParseLabelDeclaration(ADeclarations);
+            tkUses: ParseUsesClause;
+            tkType: ParseTypeSection(ADeclarations);
+            tkVar: ParseVariableDeclarations(ADeclarations);
+            tkProcedure, tkFunction, tkConstructor, tkDestructor:
+                ADeclarations.Add(ParseSubroutineDeclaration);
+        end;
+    end;
+end;
+
+function TParser.ParseBlock: TBlockNode;
+var
+  declarations: TList;
+  compoundStatement: TCompoundStatementNode;
+  i: integer;
+begin
+  declarations := TList.Create;
+  try
+    ParseDeclarationPart(declarations);
+    compoundStatement := ParseCompoundStatement;
+    Result := TBlockNode.Create(compoundStatement);
+    for i := 0 to declarations.Count - 1 do
+        Result.AddDeclaration(TASTNode(declarations[i]));
+    declarations.Clear; // We've transferred ownership
+  finally
+    declarations.Free;
+  end;
+end;
+
+function TParser.ParseProgram: TProgramNode;
+var
+  programName: string;
+  blockNode: TBlockNode;
+begin
+  Eat(tkProgram);
+  programName := FCurrentToken.Value;
+  Eat(tkIdentifier);
+  if FCurrentToken.TokenType = tkSemicolon then
+    Eat(tkSemicolon);
+
+  blockNode := ParseBlock;
+  Result := TProgramNode.Create(programName, blockNode);
+  Eat(tkDot);
+end;
+
+function TParser.Parse: TASTNode;
+begin
+  Result := ParseProgram;
+  if FCurrentToken.TokenType <> tkEOF then
+    raise Exception.Create('Extra characters at end of file.');
+end;
+
+function TParser.ParsePointerType: TTypeNode;
+begin
+    Eat(tkCaret);
+    Result := TPointerNode.Create(ParseTypeSpec);
+end;
+
+function TParser.ParseArrayType: TTypeNode;
+var
+    node: TArrayNode;
+    elementType: TTypeNode;
+begin
+    Eat(tkArray);
+
+    if FCurrentToken.TokenType = tkLBracket then
+    begin
+        Eat(tkLBracket);
+        while FCurrentToken.TokenType <> tkRBracket do
+            NextToken();
+        Eat(tkRBracket);
+    end;
+
+    Eat(tkOf);
+    elementType := ParseTypeSpec;
+
+    node := TArrayNode.Create(elementType);
+
+    Result := node;
+end;
+
+function TParser.ParseSetType: TTypeNode;
+var
+    baseType: TTypeNode;
+begin
+    Eat(tkSet);
+    Eat(tkOf);
+    baseType := ParseTypeSpec;
+    Result := TSetNode.Create(baseType);
+end;
+
+function TParser.ParseRecordType: TTypeNode;
+var
+    node: TRecordNode;
+    fields: TList;
+    i: integer;
+    nestingLevel: integer;
+begin
+    Eat(tkRecord);
+    node := TRecordNode.Create;
+
+    while (FCurrentToken.TokenType <> tkEnd) and (FCurrentToken.TokenType <> tkCase) do
+    begin
+        fields := ParseFieldDeclaration(vPublic);
+        for i := 0 to fields.Count - 1 do
+            node.Fields.Add(fields[i]);
+        fields.Clear;
+        fields.Free;
+    end;
+
+    if FCurrentToken.TokenType = tkCase then
+    begin
+        Eat(tkCase);
+        nestingLevel := 1;
+        while nestingLevel > 0 do
+        begin
+            if FCurrentToken.TokenType = tkRecord then
+                Inc(nestingLevel)
+            else if FCurrentToken.TokenType = tkEnd then
+                Dec(nestingLevel);
+
+            if nestingLevel = 0 then break;
+            NextToken();
+        end;
+    end;
+
+    Eat(tkEnd);
+    Result := node;
+end;
+
+function TParser.ParseSubrangeType: TTypeNode;
+var
+    lower, upper: TExpressionNode;
+begin
+    lower := ParseExpression;
+    Eat(tkDotDot);
+    upper := ParseExpression;
+    Result := TSubrangeNode.Create(lower, upper);
+end;
+
+function TParser.ParseProceduralType: TTypeNode;
+begin
+    Eat(FCurrentToken.TokenType);
+
+    if FCurrentToken.TokenType = tkLParen then
+    begin
+        Eat(tkLParen);
+        while FCurrentToken.TokenType <> tkRParen do NextToken();
+        Eat(tkRParen);
+    end;
+
+    if FCurrentToken.TokenType = tkColon then
+    begin
+        Eat(tkColon);
+        ParseTypeSpec;
+    end;
+
+    Result := TTypeNode.Create('procedural');
+end;
+
+function TParser.ParseEnumType: TTypeNode;
+var
+    node: TEnumNode;
+begin
+    Eat(tkLParen);
+    node := TEnumNode.Create;
+
+    while FCurrentToken.TokenType <> tkRParen do
+    begin
+        node.Elements.Add(FCurrentToken.Value);
+        Eat(tkIdentifier);
+        if FCurrentToken.TokenType = tkComma then
+            Eat(tkComma);
+    end;
+
+    Eat(tkRParen);
+    Result := node;
+end;
+
+function TParser.ParseTypeSpec: TTypeNode;
+begin
+  case FCurrentToken.TokenType of
+    tkIdentifier:
+      begin
+        Result := TTypeNode.Create(FCurrentToken.Value);
+        Eat(tkIdentifier);
+        if FCurrentToken.TokenType = tkLBracket then
+        begin
+            Eat(tkLBracket);
+            while FCurrentToken.TokenType <> tkRBracket do
+                NextToken();
+            Eat(tkRBracket);
+        end;
+      end;
+    tkCaret:
+      Result := ParsePointerType;
+    tkArray:
+      Result := ParseArrayType;
+    tkSet:
+      Result := ParseSetType;
+    tkRecord:
+      Result := ParseRecordType;
+    tkFunction, tkProcedure:
+      Result := ParseProceduralType;
+    tkLParen:
+      Result := ParseEnumType;
+    tkIntegerLiteral, tkStringLiteral:
+      Result := ParseSubrangeType;
+  else
+    raise Exception.CreateFmt('Unexpected token in type specification: %s', [FCurrentToken.Value]);
+  end;
+end;
+
+procedure TParser.ParseVariableDeclarations(ADeclarations: TList);
+var
+  varName: string;
+  varTypeNode, finalTypeNode: TTypeNode;
+  decls: TStringList;
+  typeSymbol: TSymbol;
+begin
+  Eat(tkVar);
+  while FCurrentToken.TokenType = tkIdentifier do
+  begin
+    decls := TStringList.Create;
+    try
+      decls.Add(FCurrentToken.Value);
+      Eat(tkIdentifier);
+
+      while FCurrentToken.TokenType = tkComma do
+      begin
+        Eat(tkComma);
+        decls.Add(FCurrentToken.Value);
+        Eat(tkIdentifier);
+      end;
+
+      Eat(tkColon);
+      varTypeNode := ParseTypeSpec;
+
+      finalTypeNode := varTypeNode;
+      if varTypeNode.ClassType = TTypeNode then
+      begin
+          typeSymbol := FSymbolTable.Lookup(varTypeNode.TypeName);
+          if not Assigned(typeSymbol) then
+              raise Exception.CreateFmt('Unknown type: %s', [varTypeNode.TypeName]);
+          finalTypeNode := typeSymbol.SymbolType;
+          varTypeNode.Free;
+      end;
+
+      for varName in decls do
+      begin
+        if Assigned(FSymbolTable.Lookup(varName, True)) then
+          raise Exception.CreateFmt('Duplicate identifier in scope: %s', [varName]);
+        FSymbolTable.Insert(TVarSymbol.Create(varName, finalTypeNode));
+        ADeclarations.Add(TVarDeclNode.Create(varName, finalTypeNode));
+      end;
+
+    finally
+      decls.Free;
+    end;
+    Eat(tkSemicolon);
+  end;
+end;
+
+procedure TParser.ParseParameterList(ASubroutineNode: TSubroutineDeclNode);
+var
+    paramName: string;
+    paramTypeNode, finalTypeNode: TTypeNode;
+    decls: TStringList;
+    typeSymbol: TSymbol;
+begin
+    Eat(tkLParen);
+    while FCurrentToken.TokenType <> tkRParen do
+    begin
+        if FCurrentToken.TokenType = tkVar or FCurrentToken.TokenType = tkConst then
+            Eat(FCurrentToken.TokenType);
+
+        decls := TStringList.Create;
+        try
+            decls.Add(FCurrentToken.Value);
+            Eat(tkIdentifier);
+            while FCurrentToken.TokenType = tkComma do
+            begin
+                Eat(tkComma);
+                decls.Add(FCurrentToken.Value);
+                Eat(tkIdentifier);
+            end;
+
+            Eat(tkColon);
+            paramTypeNode := ParseTypeSpec;
+
+            finalTypeNode := paramTypeNode;
+            if paramTypeNode.ClassType = TTypeNode then
+            begin
+                typeSymbol := FSymbolTable.Lookup(paramTypeNode.TypeName);
+                if not Assigned(typeSymbol) then
+                    raise Exception.CreateFmt('Unknown type in parameter list: %s', [paramTypeNode.TypeName]);
+                finalTypeNode := typeSymbol.SymbolType;
+                paramTypeNode.Free;
+            end;
+
+            for paramName in decls do
+            begin
+                ASubroutineNode.Parameters.Add(TVarDeclNode.Create(paramName, finalTypeNode));
+            end;
+        finally
+          decls.Free;
+        end;
+
+        if FCurrentToken.TokenType = tkSemicolon then
+            Eat(tkSemicolon);
+    end;
+    Eat(tkRParen);
+end;
+
+function TParser.ParseSubroutineDeclaration: TASTNode;
+var
+    subroutineName: string;
+    body: TBlockNode;
+    subroutineType: TTokenType;
+    isFunction: boolean;
+    node: TSubroutineDeclNode;
+    param: TVarDeclNode;
+    i: integer;
+begin
+    subroutineType := FCurrentToken.TokenType;
+    Eat(subroutineType);
+
+    subroutineName := FCurrentToken.Value;
+    Eat(tkIdentifier);
+
+    if FCurrentToken.TokenType = tkDot then
+    begin
+        Eat(tkDot);
+        Eat(tkIdentifier);
+    end;
+
+    isFunction := (subroutineType = tkFunction);
+    node := TSubroutineDeclNode.Create(subroutineName, nil);
+
+    if FCurrentToken.TokenType = tkLParen then
+    begin
+        ParseParameterList(node);
+    end;
+
+    if isFunction then
+    begin
+        Eat(tkColon);
+        node.ReturnType := ParseTypeSpec;
+    end;
+
+    Eat(tkSemicolon);
+
+    FSymbolTable.EnterScope;
+    try
+        for i := 0 to node.Parameters.Count - 1 do
+        begin
+            param := TVarDeclNode(node.Parameters[i]);
+            FSymbolTable.Insert(TVarSymbol.Create(param.VarName, param.VarType));
+        end;
+        if isFunction then
+        begin
+            if not Assigned(node.ReturnType) then raise Exception.Create('Function has no return type');
+            FSymbolTable.Insert(TVarSymbol.Create('Result', node.ReturnType));
+        end;
+
+        body := ParseBlock;
+        node.Body := body;
+    finally
+        FSymbolTable.LeaveScope;
+    end;
+
+    Eat(tkSemicolon);
+
+    Result := node;
+end;
+
 procedure TParser.ParseUsesClause;
 begin
     Eat(tkUses);
-    // For now, just parse and ignore the unit names
     Eat(tkIdentifier);
     while FCurrentToken.TokenType = tkComma do
     begin
@@ -125,7 +706,6 @@ begin
         if not Assigned(typeSymbol) then
             raise Exception.CreateFmt('Unknown type: %s', [varTypeNode.TypeName]);
         finalTypeNode := typeSymbol.SymbolType;
-        // The original varTypeNode is just a name, free it
         varTypeNode.Free;
     end;
 
@@ -133,8 +713,6 @@ begin
     begin
       if Assigned(FSymbolTable.Lookup(varName, True)) then
         raise Exception.CreateFmt('Duplicate identifier in scope: %s', [varName]);
-      // TODO: This shares the finalTypeNode pointer, which will cause a double-free later.
-      // A proper implementation needs to clone the node.
       FSymbolTable.Insert(TVarSymbol.Create(varName, finalTypeNode));
       Result.Add(TVarDeclNode.Create(varName, finalTypeNode, AVisibility));
     end;
@@ -164,25 +742,22 @@ begin
   node.IsConstructor := tokenType = tkConstructor;
   node.IsDestructor := tokenType = tkDestructor;
 
-  // Consume parameter list if present
   if FCurrentToken.TokenType = tkLParen then
   begin
     Eat(tkLParen);
     while FCurrentToken.TokenType <> tkRParen do
     begin
-      NextToken(); // Just consume for now, don't build parameter AST yet
+      NextToken();
     end;
     Eat(tkRParen);
   end;
 
-  // Consume return type if present (for functions)
   if FCurrentToken.TokenType = tkColon then
   begin
     Eat(tkColon);
     node.ReturnType := ParseTypeSpec;
   end;
 
-  // Consume directives
   while FCurrentToken.TokenType in [tkVirtual, tkOverride, tkOverload] do
   begin
       case FCurrentToken.TokenType of
@@ -190,7 +765,6 @@ begin
           tkOverride: node.Directives := node.Directives + [mdOverride];
           tkOverload: node.Directives := node.Directives + [mdOverload];
       else
-        // This case should not be reached due to the loop condition
       end;
       Eat(FCurrentToken.TokenType);
   end;
@@ -205,12 +779,12 @@ var
     i: integer;
 begin
     case FCurrentToken.TokenType of
-        tkIdentifier: // Field declaration
+        tkIdentifier:
             begin
                 members := ParseFieldDeclaration(AVisibility);
                 for i := 0 to members.Count - 1 do
                     AClassNode.Members.Add(members[i]);
-                members.Clear; // Clear list, but don't free nodes
+                members.Clear;
                 members.Free;
             end;
         tkProcedure, tkFunction, tkConstructor, tkDestructor:
@@ -224,7 +798,7 @@ procedure TParser.ParseClassBody(AClassNode: TClassNode);
 var
     visibility: TVisibility;
 begin
-    visibility := vPrivate; // Default for classes
+    visibility := vPrivate;
     while FCurrentToken.TokenType <> tkEnd do
     begin
         if FCurrentToken.TokenType = tkPublic then
@@ -273,7 +847,6 @@ begin
 
     if FCurrentToken.TokenType = tkSemicolon then
     begin
-        // Forward declaration
         Result := TClassNode.Create(AClassName, '');
         Exit;
     end;
@@ -316,144 +889,6 @@ begin
     begin
         ADeclarations.Add(ParseTypeDeclaration);
     end;
-end;
-
-function TParser.ParseFactor: TExpressionNode;
-var
-    node: TExpressionNode;
-    memberName: string;
-    callNode: TMethodCallNode;
-    arg: TExpressionNode;
-begin
-    case FCurrentToken.TokenType of
-        tkIntegerLiteral:
-            begin
-                node := TIntegerLiteralNode.Create(StrToInt(FCurrentToken.Value));
-                Eat(tkIntegerLiteral);
-            end;
-        tkFloatLiteral:
-            begin
-                // For now, we don't have a TFloatLiteralNode, so we'll just consume it
-                // and create a placeholder. I should add TFloatLiteralNode to the AST.
-                Eat(tkFloatLiteral);
-                node := TExpressionNode.Create;
-            end;
-        tkStringLiteral:
-            begin
-                node := TStringLiteralNode.Create(FCurrentToken.Value);
-                Eat(tkStringLiteral);
-            end;
-        tkIdentifier:
-            begin
-                node := TVarAccessNode.Create(FCurrentToken.Value);
-                Eat(tkIdentifier);
-            end;
-        tkLParen:
-            begin
-                Eat(tkLParen);
-                node := ParseExpression;
-                Eat(tkRParen);
-            end;
-    else
-        node := nil; // Should raise an error
-    end;
-
-    // Handle postfix operations like member access and method calls
-    while FCurrentToken.TokenType in [tkDot, tkLParen] do
-    begin
-        if FCurrentToken.TokenType = tkDot then
-        begin
-            Eat(tkDot);
-            memberName := FCurrentToken.Value;
-            Eat(tkIdentifier);
-            node := TMemberAccessNode.Create(node, memberName);
-        end
-        else if FCurrentToken.TokenType = tkLParen then
-        begin
-            Eat(tkLParen);
-            callNode := TMethodCallNode.Create(node);
-            if FCurrentToken.TokenType <> tkRParen then
-            begin
-                // Parse arguments
-                arg := ParseExpression;
-                callNode.Arguments.Add(arg);
-                while FCurrentToken.TokenType = tkComma do
-                begin
-                    Eat(tkComma);
-                    arg := ParseExpression;
-                    callNode.Arguments.Add(arg);
-                end;
-            end;
-            Eat(tkRParen);
-            node := callNode;
-        end;
-    end;
-
-    Result := node;
-end;
-
-function TParser.ParseTerm: TExpressionNode;
-var
-    node: TExpressionNode;
-    opToken: TTokenType;
-    op: TOperatorType;
-begin
-    node := ParseFactor;
-    while FCurrentToken.TokenType in [tkStar, tkSlash] do
-    begin
-        opToken := FCurrentToken.TokenType;
-        Eat(opToken);
-        case opToken of
-            tkStar: op := opStar;
-            tkSlash: op := opSlash;
-        end;
-        node := TBinaryOpNode.Create(node, op, ParseFactor);
-    end;
-    Result := node;
-end;
-
-function TParser.ParseAdditiveExpression: TExpressionNode;
-var
-    node: TExpressionNode;
-    opToken: TTokenType;
-    op: TOperatorType;
-begin
-    node := ParseTerm;
-    while FCurrentToken.TokenType in [tkPlus, tkMinus] do
-    begin
-        opToken := FCurrentToken.TokenType;
-        Eat(opToken);
-        case opToken of
-            tkPlus: op := opPlus;
-            tkMinus: op := opMinus;
-        end;
-        node := TBinaryOpNode.Create(node, op, ParseTerm);
-    end;
-    Result := node;
-end;
-
-function TParser.ParseSimpleExpression: TExpressionNode;
-var
-    node: TExpressionNode;
-    opToken: TTokenType;
-    op: TOperatorType;
-begin
-    node := ParseAdditiveExpression;
-    while FCurrentToken.TokenType in [tkEqual, tkNotEqual, tkLess, tkLessEqual, tkGreater, tkGreaterEqual] do
-    begin
-        opToken := FCurrentToken.TokenType;
-        Eat(opToken);
-        case opToken of
-            tkEqual: op := opEqual;
-            tkNotEqual: op := opNotEqual;
-            tkLess: op := opLess;
-            tkLessEqual: op := opLessEqual;
-            tkGreater: op := opGreater;
-            tkGreaterEqual: op := opGreaterEqual;
-        end;
-        node := TBinaryOpNode.Create(node, op, ParseAdditiveExpression);
-    end;
-    Result := node;
 end;
 
 function TParser.ParseExpression: TExpressionNode;
@@ -532,7 +967,7 @@ begin
     node := TRepeatNode.Create(cond);
     for i := 0 to stmts.Count - 1 do
         node.Statements.Add(stmts[i]);
-    stmts.Clear; // We've moved the nodes
+    stmts.Clear;
     Result := node;
   finally
     stmts.Free;
@@ -545,10 +980,8 @@ begin
   ParseExpression;
   Eat(tkOf);
 
-  // Consume case labels and statements
   while (FCurrentToken.TokenType <> tkEnd) and (FCurrentToken.TokenType <> tkElse) do
   begin
-      // crude consumption of case branches
       while FCurrentToken.TokenType <> tkSemicolon do
           NextToken();
       Eat(tkSemicolon);
@@ -557,17 +990,54 @@ begin
   if FCurrentToken.TokenType = tkElse then
   begin
     Eat(tkElse);
-    // consume statements in else part
     while FCurrentToken.TokenType <> tkEnd do
         NextToken();
   end;
 
   Eat(tkEnd);
-  Result := TStatementNode.Create; // Placeholder
+  Result := TStatementNode.Create;
+end;
+
+function TParser.ParseForStatement: TStatementNode;
+begin
+    Eat(tkFor);
+    while FCurrentToken.TokenType <> tkDo do
+        NextToken();
+    Eat(tkDo);
+    ParseStatement;
+    Result := TStatementNode.Create;
+end;
+
+function TParser.ParseWithStatement: TStatementNode;
+begin
+    Eat(tkWith);
+    while FCurrentToken.TokenType <> tkDo do
+        NextToken();
+    Eat(tkDo);
+    ParseStatement;
+    Result := TStatementNode.Create;
+end;
+
+function TParser.ParseGotoStatement: TStatementNode;
+begin
+    Eat(tkGoto);
+    Eat(tkIdentifier);
+    Result := TStatementNode.Create;
 end;
 
 function TParser.ParseStatement: TStatementNode;
+var
+  labelName: string;
 begin
+  if (FCurrentToken.TokenType = tkIdentifier) and (PeekToken.TokenType = tkColon) then
+  begin
+    labelName := FCurrentToken.Value;
+    Eat(tkIdentifier);
+    Eat(tkColon);
+    Result := ParseStatement;
+    Exit;
+  end;
+
   case FCurrentToken.TokenType of
     tkBegin:
       Result := ParseCompoundStatement;
@@ -581,8 +1051,13 @@ begin
       Result := ParseRepeatStatement;
     tkCase:
       Result := ParseCaseStatement;
+    tkFor:
+      Result := ParseForStatement;
+    tkWith:
+      Result := ParseWithStatement;
+    tkGoto:
+      Result := ParseGotoStatement;
   else
-    // Empty statement for now, or could raise error
     Result := TStatementNode.Create;
   end;
 end;
@@ -601,338 +1076,6 @@ begin
   end;
   Eat(tkEnd);
   Result := node;
-end;
-
-function TParser.ParsePointerType: TTypeNode;
-begin
-    Eat(tkCaret);
-    Result := TPointerNode.Create(ParseTypeSpec);
-end;
-
-function TParser.ParseArrayType: TTypeNode;
-var
-    node: TArrayNode;
-    elementType: TTypeNode;
-begin
-    Eat(tkArray);
-
-    // The element type is parsed at the end, so we can't create the node yet.
-    // This is tricky. Let's parse the index types first.
-
-    if FCurrentToken.TokenType = tkLBracket then
-    begin
-        Eat(tkLBracket);
-        // We will create a temporary list of index types
-        // and attach it to the node later.
-        // This is getting too complex for a placeholder.
-        // I will just consume the tokens for now.
-        while FCurrentToken.TokenType <> tkRBracket do
-            NextToken();
-        Eat(tkRBracket);
-    end;
-
-    Eat(tkOf);
-    elementType := ParseTypeSpec;
-
-    node := TArrayNode.Create(elementType);
-    // In a real implementation, I would add the parsed index types to node.IndexTypes
-
-    Result := node;
-end;
-
-function TParser.ParseSetType: TTypeNode;
-begin
-    Eat(tkSet);
-    Eat(tkOf);
-    ParseTypeSpec;
-    Result := TTypeNode.Create('set'); // Placeholder
-end;
-
-function TParser.ParseRecordType: TTypeNode;
-var
-    node: TRecordNode;
-    fields: TList;
-    i: integer;
-    nestingLevel: integer;
-begin
-    Eat(tkRecord);
-    node := TRecordNode.Create;
-
-    // Parse fixed part
-    while (FCurrentToken.TokenType <> tkEnd) and (FCurrentToken.TokenType <> tkCase) do
-    begin
-        fields := ParseFieldDeclaration(vPublic);
-        for i := 0 to fields.Count - 1 do
-            node.Fields.Add(fields[i]);
-        fields.Clear;
-        fields.Free;
-    end;
-
-    // Parse variant part if it exists
-    if FCurrentToken.TokenType = tkCase then
-    begin
-        Eat(tkCase);
-        // Consume variant part as placeholder
-        nestingLevel := 1;
-        while nestingLevel > 0 do
-        begin
-            if FCurrentToken.TokenType = tkRecord then // nested record
-                Inc(nestingLevel)
-            else if FCurrentToken.TokenType = tkEnd then
-                Dec(nestingLevel);
-
-            if nestingLevel = 0 then break;
-            NextToken();
-        end;
-    end;
-
-    Eat(tkEnd);
-    Result := node;
-end;
-
-function TParser.ParseSubrangeType: TTypeNode;
-begin
-    // consume lower bound
-    NextToken();
-    Eat(tkDotDot);
-    // consume upper bound
-    NextToken();
-    Result := TTypeNode.Create('subrange'); // Placeholder
-end;
-
-function TParser.ParseProceduralType: TTypeNode;
-begin
-    Eat(FCurrentToken.TokenType); // function or procedure
-
-    // Consume parameters
-    if FCurrentToken.TokenType = tkLParen then
-    begin
-        Eat(tkLParen);
-        while FCurrentToken.TokenType <> tkRParen do NextToken();
-        Eat(tkRParen);
-    end;
-
-    // Consume return type
-    if FCurrentToken.TokenType = tkColon then
-    begin
-        Eat(tkColon);
-        ParseTypeSpec;
-    end;
-
-    Result := TTypeNode.Create('procedural'); // Placeholder
-end;
-
-function TParser.ParseEnumType: TTypeNode;
-var
-    node: TEnumNode;
-begin
-    Eat(tkLParen);
-    node := TEnumNode.Create;
-
-    while FCurrentToken.TokenType <> tkRParen do
-    begin
-        node.Elements.Add(FCurrentToken.Value);
-        Eat(tkIdentifier);
-        if FCurrentToken.TokenType = tkComma then
-            Eat(tkComma);
-    end;
-
-    Eat(tkRParen);
-    Result := node;
-end;
-
-function TParser.ParseTypeSpec: TTypeNode;
-begin
-  case FCurrentToken.TokenType of
-    tkIdentifier:
-      begin
-        Result := TTypeNode.Create(FCurrentToken.Value);
-        Eat(tkIdentifier);
-        if FCurrentToken.TokenType = tkLBracket then
-        begin
-            Eat(tkLBracket);
-            while FCurrentToken.TokenType <> tkRBracket do
-                NextToken();
-            Eat(tkRBracket);
-        end;
-      end;
-    tkCaret:
-      Result := ParsePointerType;
-    tkArray:
-      Result := ParseArrayType;
-    tkSet:
-      Result := ParseSetType;
-    tkRecord:
-      Result := ParseRecordType;
-    tkFunction, tkProcedure:
-      Result := ParseProceduralType;
-    tkLParen:
-      Result := ParseEnumType;
-    tkIntegerLiteral, tkStringLiteral: // For subranges
-      Result := ParseSubrangeType;
-  else
-    raise Exception.CreateFmt('Unexpected token in type specification: %s', [FCurrentToken.Value]);
-  end;
-end;
-
-procedure TParser.ParseVariableDeclarations(ADeclarations: TList);
-var
-  varName: string;
-  varTypeNode, finalTypeNode: TTypeNode;
-  decls: TStringList;
-  typeSymbol: TSymbol;
-begin
-  Eat(tkVar);
-  while FCurrentToken.TokenType = tkIdentifier do
-  begin
-    decls := TStringList.Create;
-    try
-      decls.Add(FCurrentToken.Value);
-      Eat(tkIdentifier);
-
-      while FCurrentToken.TokenType = tkComma do
-      begin
-        Eat(tkComma);
-        decls.Add(FCurrentToken.Value);
-        Eat(tkIdentifier);
-      end;
-
-      Eat(tkColon);
-      varTypeNode := ParseTypeSpec;
-
-      if FCurrentToken.TokenType = tkEqual then
-      begin
-          Eat(tkEqual);
-          ParseExpression;
-      end;
-
-      finalTypeNode := varTypeNode;
-      if varTypeNode.ClassType = TTypeNode then
-      begin
-          typeSymbol := FSymbolTable.Lookup(varTypeNode.TypeName);
-          if not Assigned(typeSymbol) then
-              raise Exception.CreateFmt('Unknown type: %s', [varTypeNode.TypeName]);
-          finalTypeNode := typeSymbol.SymbolType;
-          varTypeNode.Free;
-      end;
-
-      for varName in decls do
-      begin
-        if Assigned(FSymbolTable.Lookup(varName, True)) then
-          raise Exception.CreateFmt('Duplicate identifier in scope: %s', [varName]);
-        // TODO: This shares the finalTypeNode pointer, which will cause a double-free later.
-        FSymbolTable.Insert(TVarSymbol.Create(varName, finalTypeNode));
-        ADeclarations.Add(TVarDeclNode.Create(varName, finalTypeNode));
-      end;
-
-    finally
-      decls.Free;
-    end;
-    Eat(tkSemicolon);
-  end;
-end;
-
-function TParser.ParseSubroutineDeclaration: TASTNode;
-var
-    subroutineName: string;
-    body: TBlockNode;
-begin
-    // This function parses both standalone subroutines and method implementations
-    // For now, it treats method implementations as standalone for parsing purposes
-    // A later semantic analysis step would be needed to link them to classes.
-
-    Eat(FCurrentToken.TokenType); // procedure or function
-
-    subroutineName := FCurrentToken.Value;
-    Eat(tkIdentifier);
-
-    if FCurrentToken.TokenType = tkDot then
-    begin
-        // It's a method implementation, consume and ignore for now
-        Eat(tkDot);
-        Eat(tkIdentifier);
-    end;
-
-    // Consume parameters
-    if FCurrentToken.TokenType = tkLParen then
-    begin
-        Eat(tkLParen);
-        while FCurrentToken.TokenType <> tkRParen do NextToken();
-        Eat(tkRParen);
-    end;
-
-    // Consume return type
-    if FCurrentToken.TokenType = tkColon then
-    begin
-        Eat(tkColon);
-        ParseTypeSpec;
-    end;
-
-    Eat(tkSemicolon);
-
-    // For now, we assume all subroutines have a body that follows
-    FSymbolTable.EnterScope;
-    body := ParseBlock; // ParseBlock handles local declarations and a compound statement
-    FSymbolTable.LeaveScope;
-    Eat(tkSemicolon);
-
-    Result := TSubroutineDeclNode.Create(subroutineName, body);
-end;
-
-procedure TParser.ParseDeclarationPart(ADeclarations: TList);
-begin
-    while FCurrentToken.TokenType in [tkUses, tkType, tkVar, tkProcedure, tkFunction, tkConstructor, tkDestructor] do
-    begin
-        case FCurrentToken.TokenType of
-            tkUses: ParseUsesClause;
-            tkType: ParseTypeSection(ADeclarations);
-            tkVar: ParseVariableDeclarations(ADeclarations);
-            tkProcedure, tkFunction, tkConstructor, tkDestructor:
-                ADeclarations.Add(ParseSubroutineDeclaration);
-        end;
-    end;
-end;
-
-function TParser.ParseBlock: TBlockNode;
-var
-  declarations: TList;
-  compoundStatement: TCompoundStatementNode;
-  i: integer;
-begin
-  declarations := TList.Create;
-  try
-    ParseDeclarationPart(declarations);
-    compoundStatement := ParseCompoundStatement;
-    Result := TBlockNode.Create(compoundStatement);
-    for i := 0 to declarations.Count - 1 do
-        Result.AddDeclaration(TASTNode(declarations[i]));
-    declarations.Clear; // We've transferred ownership
-  finally
-    declarations.Free;
-  end;
-end;
-
-function TParser.ParseProgram: TProgramNode;
-var
-  programName: string;
-  blockNode: TBlockNode;
-begin
-  Eat(tkProgram);
-  programName := FCurrentToken.Value;
-  Eat(tkIdentifier);
-  if FCurrentToken.TokenType = tkSemicolon then
-    Eat(tkSemicolon);
-
-  blockNode := ParseBlock;
-  Result := TProgramNode.Create(programName, blockNode);
-  Eat(tkDot);
-end;
-
-function TParser.Parse: TASTNode;
-begin
-  Result := ParseProgram;
-  if FCurrentToken.TokenType <> tkEOF then
-    raise Exception.Create('Extra characters at end of file.');
 end;
 
 end.
